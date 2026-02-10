@@ -32,20 +32,26 @@ module.exports = async (req, res) => {
   }
 
   try {
-    const response = await fetch('https://api.openai.com/v1/images/generations', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'gpt-image-1.5',
-        prompt: body.prompt,
-        size: '1024x1024',
-        quality: 'medium',
-        response_format: 'b64_json',
-      }),
-    });
+    const makeRequest = async (model) =>
+      fetch('https://api.openai.com/v1/images/generations', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model,
+          prompt: body.prompt,
+          size: '1024x1024',
+          quality: 'medium',
+          response_format: 'b64_json',
+        }),
+      });
+
+    let response = await makeRequest('gpt-image-1.5');
+    if (!response.ok && [403, 404].includes(response.status)) {
+      response = await makeRequest('gpt-image-1');
+    }
 
     if (!response.ok) {
       const errText = await response.text();
@@ -63,6 +69,6 @@ module.exports = async (req, res) => {
 
     res.status(200).json({ image_base64: imageBase64, mime: 'image/png' });
   } catch (err) {
-    res.status(500).json({ error: 'Image generation error' });
+    res.status(500).json({ error: 'Image generation error', details: err?.message });
   }
 };

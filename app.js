@@ -205,12 +205,11 @@ async function ensureImage() {
     body: JSON.stringify({ prompt: state.current.image_prompt }),
   });
 
+  const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    artLoading.textContent = 'Unable to create art.';
+    artLoading.textContent = data.error || 'Unable to create art.';
     return;
   }
-
-  const data = await res.json();
   if (data.image_base64) {
     await idb.set(state.current.id, data.image_base64);
     updateArt(data.image_base64);
@@ -233,8 +232,12 @@ async function loadWord({ forceNew }) {
 
   try {
     const res = await fetch(`/api/word?lang=${state.lang}`);
-    if (!res.ok) throw new Error('Failed');
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const message = data.error || 'Unable to load a new word.';
+      const detail = data.details ? ` (${data.details})` : '';
+      throw new Error(`${message}${detail}`);
+    }
     state.current = data;
 
     const nextCache = {
@@ -244,10 +247,11 @@ async function loadWord({ forceNew }) {
     storage.save('www.dailyCache', nextCache);
     updateCard();
   } catch (err) {
-    wordPronounce.textContent = 'Offline';
+    const message = err?.message || 'Unable to load a new word.';
+    wordPronounce.textContent = message.includes('OPENAI_API_KEY') ? 'API key missing' : 'Offline';
     wordNative.textContent = 'Try again';
     wordType.textContent = '—';
-    wordMeaning.textContent = 'Unable to load a new word.';
+    wordMeaning.textContent = message;
   } finally {
     setLoading(false);
   }
