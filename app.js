@@ -44,6 +44,11 @@ const viewButtons = document.querySelectorAll('.nav-btn');
 const views = document.querySelectorAll('.view');
 
 const galleryGrid = document.getElementById('galleryGrid');
+const gallerySearch = document.getElementById('gallerySearch');
+const statTotalWords = document.getElementById('statTotalWords');
+const statFavorites = document.getElementById('statFavorites');
+const statLanguages = document.getElementById('statLanguages');
+const statShowing = document.getElementById('statShowing');
 
 const askModal = document.getElementById('askModal');
 const askInput = document.getElementById('askInput');
@@ -55,6 +60,9 @@ const quizMeta = document.getElementById('quizMeta');
 const quizQuestion = document.getElementById('quizQuestion');
 const quizOptions = document.getElementById('quizOptions');
 const quizNextBtn = document.getElementById('quizNextBtn');
+const quizSceneImage = document.getElementById('quizSceneImage');
+const quizSceneCaption = document.getElementById('quizSceneCaption');
+const quizSceneFallback = document.getElementById('quizSceneFallback');
 
 const state = {
   lang: 'en',
@@ -68,6 +76,7 @@ const state = {
   collected: [],
   favorites: new Set(),
   indices: { en: 0, uk: 0, fa: 0 },
+  galleryQuery: '',
   audioCache: new Map(),
   chat: {},
   quiz: {
@@ -285,6 +294,9 @@ function setView(view) {
 
   updateTopLangUI();
 
+  if (view === 'gallery' && gallerySearch) {
+    gallerySearch.value = state.galleryQuery;
+  }
   if (view === 'gallery') renderGallery();
   if (view === 'quiz') buildQuiz();
 }
@@ -747,10 +759,33 @@ function renderGallery() {
   } else if (state.filter !== 'all') {
     filtered = filtered.filter((item) => item.language === state.filter);
   }
+  const query = state.galleryQuery.trim().toLowerCase();
+  if (query) {
+    filtered = filtered.filter((item) =>
+      [item.native, item.romanization, item.meaning_en, item.type]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query)),
+    );
+  }
+
+  if (statTotalWords) statTotalWords.textContent = String(state.collected.length);
+  if (statFavorites) {
+    const favoriteCount = state.collected.filter((item) => state.favorites.has(item.id)).length;
+    statFavorites.textContent = String(favoriteCount);
+  }
+  if (statLanguages) {
+    const languageCount = new Set(state.collected.map((item) => item.language)).size;
+    statLanguages.textContent = String(languageCount);
+  }
+  if (statShowing) statShowing.textContent = String(filtered.length);
 
   if (!filtered.length) {
     const empty = document.createElement('p');
-    empty.textContent = state.filter === 'favorites' ? 'No favorited words yet.' : 'Collect words to build your gallery.';
+    if (state.galleryQuery.trim()) {
+      empty.textContent = 'No words match your search.';
+    } else {
+      empty.textContent = state.filter === 'favorites' ? 'No favorited words yet.' : 'Collect words to build your gallery.';
+    }
     empty.style.color = 'var(--muted)';
     galleryGrid.appendChild(empty);
     return;
@@ -779,6 +814,18 @@ function renderGallery() {
 
     meta.append(pronounce, badge);
 
+    const preview = document.createElement('div');
+    preview.className = 'art-frame gallery-preview';
+
+    const previewLoading = document.createElement('div');
+    previewLoading.className = 'art-loading';
+    previewLoading.textContent = 'Loading art...';
+
+    const previewImg = document.createElement('img');
+    previewImg.alt = 'Collected illustration preview';
+
+    preview.append(previewLoading, previewImg);
+
     const native = document.createElement('h2');
     native.className = 'native-word';
     native.textContent = entry.native;
@@ -788,7 +835,7 @@ function renderGallery() {
     meaning.className = 'meaning';
     meaning.textContent = entry.meaning_en;
 
-    front.append(meta, native, meaning);
+    front.append(preview, meta, native, meaning);
 
     const back = document.createElement('article');
     back.className = 'card-face card-back';
@@ -835,11 +882,16 @@ function renderGallery() {
     idb.get('images', entry.imageId).then((base64) => {
       if (!base64) {
         loading.textContent = 'No art yet.';
+        previewLoading.textContent = 'No art yet.';
         return;
       }
-      img.src = `data:image/png;base64,${base64}`;
+      const dataUrl = toImageDataUrl(base64);
+      img.src = dataUrl;
+      previewImg.src = dataUrl;
       frame.classList.add('loaded');
+      preview.classList.add('loaded');
       loading.textContent = '';
+      previewLoading.textContent = '';
     });
   });
 }
@@ -861,6 +913,17 @@ function buildQuiz() {
   if (pool.length < 2) {
     quizMeta.textContent = 'Collect at least 2 words to start the quiz.';
     quizQuestion.textContent = '—';
+    if (quizSceneImage) {
+      quizSceneImage.removeAttribute('src');
+      quizSceneImage.style.display = 'none';
+    }
+    if (quizSceneFallback) {
+      quizSceneFallback.hidden = false;
+      quizSceneFallback.textContent = 'Collect words with images to enable visual quiz mode.';
+    }
+    if (quizSceneCaption) {
+      quizSceneCaption.textContent = 'Image context from your collected card.';
+    }
     quizOptions.innerHTML = '';
     quizNextBtn.disabled = true;
     return;
@@ -881,6 +944,33 @@ function buildQuiz() {
   renderQuizQuestion();
 }
 
+async function renderQuizScene(entry) {
+  if (!quizSceneImage || !quizSceneFallback || !entry) return;
+  const imageId = entry.imageId || entry.id;
+
+  if (!imageId) {
+    quizSceneImage.removeAttribute('src');
+    quizSceneImage.style.display = 'none';
+    quizSceneFallback.hidden = false;
+    if (quizSceneCaption) quizSceneCaption.textContent = 'No image available for this word yet.';
+    return;
+  }
+
+  const base64 = await idb.get('images', imageId);
+  if (!base64) {
+    quizSceneImage.removeAttribute('src');
+    quizSceneImage.style.display = 'none';
+    quizSceneFallback.hidden = false;
+    if (quizSceneCaption) quizSceneCaption.textContent = 'Collect this card once to cache its scene image.';
+    return;
+  }
+
+  quizSceneImage.src = toImageDataUrl(base64);
+  quizSceneImage.style.display = 'block';
+  quizSceneFallback.hidden = true;
+  if (quizSceneCaption) quizSceneCaption.textContent = entry.sentence?.meaning_en || entry.meaning_en || 'Image context';
+}
+
 function renderQuizQuestion() {
   const { questions, index, score } = state.quiz;
   const current = questions[index];
@@ -888,6 +978,14 @@ function renderQuizQuestion() {
   if (!current) {
     quizMeta.textContent = `Done! Score ${score}/${questions.length}`;
     quizQuestion.textContent = 'Great job!';
+    if (quizSceneImage) {
+      quizSceneImage.removeAttribute('src');
+      quizSceneImage.style.display = 'none';
+    }
+    if (quizSceneFallback) {
+      quizSceneFallback.hidden = false;
+      quizSceneFallback.textContent = 'Quiz completed. Press Restart to run another round.';
+    }
     quizOptions.innerHTML = '';
     quizNextBtn.disabled = false;
     quizNextBtn.textContent = 'Restart';
@@ -929,6 +1027,7 @@ function renderQuizQuestion() {
 
   quizMeta.textContent = `Question ${index + 1}/${questions.length} - Score ${score}`;
   quizQuestion.textContent = questionText;
+  void renderQuizScene(entry);
 
   options.forEach((option) => {
     const btn = document.createElement('button');
@@ -989,6 +1088,15 @@ viewButtons.forEach((btn) => {
   btn.addEventListener('click', () => setView(btn.dataset.view));
 });
 
+if (gallerySearch) {
+  gallerySearch.addEventListener('input', (event) => {
+    state.galleryQuery = event.target.value || '';
+    if (state.view === 'gallery') {
+      renderGallery();
+    }
+  });
+}
+
 function initIndices() {
   const saved = storage.load(STORAGE_KEYS.indices, null);
   if (
@@ -1030,8 +1138,14 @@ function init() {
   if (favoritesLangBtn) {
     favoritesLangBtn.hidden = true;
   }
+  if (gallerySearch) {
+    gallerySearch.value = '';
+  }
 
   state.filter = state.lang;
+  if (quizSceneFallback) {
+    quizSceneFallback.hidden = false;
+  }
   updateTopLangUI();
   loadWord({ advance: false });
 }
