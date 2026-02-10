@@ -49,7 +49,7 @@ module.exports = async (req, res) => {
       });
 
     let response = await makeRequest('gpt-image-1.5');
-    if (!response.ok && [403, 404].includes(response.status)) {
+    if (!response.ok) {
       response = await makeRequest('gpt-image-1');
     }
 

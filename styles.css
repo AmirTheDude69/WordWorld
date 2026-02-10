@@ -334,6 +334,30 @@ h1 {
   color: var(--muted);
 }
 
+.filter-switch {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.filter-btn {
+  border: 1px solid rgba(20, 18, 31, 0.08);
+  background: var(--surface);
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 180ms ease;
+}
+
+.filter-btn.active {
+  background: #111827;
+  color: #fff;
+  border-color: transparent;
+}
+
 .gallery-grid {
   display: grid;
   gap: 18px;

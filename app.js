@@ -38,6 +38,8 @@ const quizMeta = document.getElementById('quizMeta');
 const quizQuestion = document.getElementById('quizQuestion');
 const quizOptions = document.getElementById('quizOptions');
 const quizNextBtn = document.getElementById('quizNextBtn');
+const galleryFilter = document.getElementById('galleryFilter');
+const quizFilter = document.getElementById('quizFilter');
 
 const state = {
   lang: 'en',
@@ -48,6 +50,10 @@ const state = {
   loading: false,
   collected: [],
   favorites: new Set(),
+  galleryFilter: 'en',
+  quizFilter: 'en',
+  prefetch: { en: [], uk: [], fa: [] },
+  audioCache: new Map(),
   quiz: {
     questions: [],
     index: 0,
@@ -76,9 +82,11 @@ const idb = (() => {
   function openDb() {
     if (dbPromise) return dbPromise;
     dbPromise = new Promise((resolve, reject) => {
-      const request = indexedDB.open('www-images', 1);
+      const request = indexedDB.open('www-cache', 2);
       request.onupgradeneeded = (event) => {
-        event.target.result.createObjectStore('images');
+        const db = event.target.result;
+        if (!db.objectStoreNames.contains('images')) db.createObjectStore('images');
+        if (!db.objectStoreNames.contains('audio')) db.createObjectStore('audio');
       };
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
@@ -86,24 +94,24 @@ const idb = (() => {
     return dbPromise;
   }
 
-  async function get(key) {
+  async function get(storeName, key) {
     const db = await openDb();
     return new Promise((resolve) => {
-      const tx = db.transaction('images', 'readonly');
-      const store = tx.objectStore('images');
+      const tx = db.transaction(storeName, 'readonly');
+      const store = tx.objectStore(storeName);
       const req = store.get(key);
       req.onsuccess = () => resolve(req.result || null);
       req.onerror = () => resolve(null);
     });
   }
 
-  async function set(key, value) {
+  async function set(storeName, key, value) {
     const db = await openDb();
     return new Promise((resolve, reject) => {
-      const tx = db.transaction('images', 'readwrite');
+      const tx = db.transaction(storeName, 'readwrite');
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
-      tx.objectStore('images').put(value, key);
+      tx.objectStore(storeName).put(value, key);
     });
   }
 
@@ -140,6 +148,9 @@ function setView(view) {
 function setLanguage(lang) {
   if (!LANG_CONFIG[lang]) return;
   state.lang = lang;
+  state.galleryFilter = lang;
+  state.quizFilter = lang;
+  updateFilterUI();
   langButtons.forEach((btn) => {
     const active = btn.dataset.lang === lang;
     btn.classList.toggle('active', active);
@@ -192,7 +203,7 @@ function updateArt(base64) {
 
 async function ensureImage() {
   if (!state.current) return;
-  const cached = await idb.get(state.current.id);
+  const cached = await idb.get('images', state.current.id);
   if (cached) {
     updateArt(cached);
     return;
@@ -207,12 +218,25 @@ async function ensureImage() {
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    artLoading.textContent = data.error || 'Unable to create art.';
+    artLoading.textContent = data.error || data.details || 'Unable to create art.';
     return;
   }
   if (data.image_base64) {
-    await idb.set(state.current.id, data.image_base64);
+    await idb.set('images', state.current.id, data.image_base64);
     updateArt(data.image_base64);
+  }
+}
+
+async function prefetchWord(lang) {
+  if (!LANG_CONFIG[lang]) return;
+  if (state.prefetch[lang].length >= 2) return;
+  try {
+    const res = await fetch(`/api/word?lang=${lang}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data?.id) state.prefetch[lang].push(data);
+  } catch (err) {
+    // ignore prefetch errors
   }
 }
 
@@ -226,17 +250,23 @@ async function loadWord({ forceNew }) {
   if (!forceNew && cache.date === today && cache.items?.[state.lang]) {
     state.current = cache.items[state.lang];
     updateCard();
+    prefetchWord(state.lang);
     setLoading(false);
     return;
   }
 
   try {
-    const res = await fetch(`/api/word?lang=${state.lang}`);
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      const message = data.error || 'Unable to load a new word.';
-      const detail = data.details ? ` (${data.details})` : '';
-      throw new Error(`${message}${detail}`);
+    let data = null;
+    if (state.prefetch[state.lang].length > 0) {
+      data = state.prefetch[state.lang].shift();
+    } else {
+      const res = await fetch(`/api/word?lang=${state.lang}`);
+      data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const message = data.error || 'Unable to load a new word.';
+        const detail = data.details ? ` (${data.details})` : '';
+        throw new Error(`${message}${detail}`);
+      }
     }
     state.current = data;
 
@@ -246,6 +276,7 @@ async function loadWord({ forceNew }) {
     };
     storage.save('www.dailyCache', nextCache);
     updateCard();
+    prefetchWord(state.lang);
   } catch (err) {
     const message = err?.message || 'Unable to load a new word.';
     wordPronounce.textContent = message.includes('OPENAI_API_KEY') ? 'API key missing' : 'Offline';
@@ -304,6 +335,23 @@ function toggleFlip() {
 async function speakWord() {
   if (!state.current) return;
   const text = state.current.native;
+  const cacheKey = `audio-${state.current.id}`;
+
+  if (state.audioCache.has(cacheKey)) {
+    const url = state.audioCache.get(cacheKey);
+    const audio = new Audio(url);
+    audio.play();
+    return;
+  }
+
+  const cached = await idb.get('audio', cacheKey);
+  if (cached) {
+    const url = URL.createObjectURL(cached);
+    state.audioCache.set(cacheKey, url);
+    const audio = new Audio(url);
+    audio.play();
+    return;
+  }
 
   try {
     const res = await fetch('/api/speech', {
@@ -315,15 +363,13 @@ async function speakWord() {
     if (!res.ok) throw new Error('TTS failed');
 
     const blob = await res.blob();
+    await idb.set('audio', cacheKey, blob);
     const url = URL.createObjectURL(blob);
+    state.audioCache.set(cacheKey, url);
     const audio = new Audio(url);
     audio.play();
-    audio.onended = () => URL.revokeObjectURL(url);
   } catch (err) {
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = LANG_CONFIG[state.lang]?.locale || 'en-US';
-    speechSynthesis.cancel();
-    speechSynthesis.speak(utterance);
+    // Keep OpenAI TTS as the only pronunciation source.
   }
 }
 
@@ -363,7 +409,12 @@ async function sendAskQuestion() {
 
 function renderGallery() {
   galleryGrid.innerHTML = '';
-  if (!state.collected.length) {
+  const filtered =
+    state.galleryFilter === 'all'
+      ? state.collected
+      : state.collected.filter((item) => item.language === state.galleryFilter);
+
+  if (!filtered.length) {
     const empty = document.createElement('p');
     empty.textContent = 'Collect words to build your gallery.';
     empty.style.color = 'var(--muted)';
@@ -371,7 +422,7 @@ function renderGallery() {
     return;
   }
 
-  state.collected.forEach((entry) => {
+  filtered.forEach((entry) => {
     const cardWrapper = document.createElement('div');
     cardWrapper.className = 'gallery-card';
 
@@ -437,7 +488,7 @@ function renderGallery() {
       flip.classList.toggle('flipped');
     });
 
-    idb.get(entry.imageId).then((base64) => {
+    idb.get('images', entry.imageId).then((base64) => {
       if (!base64) {
         loading.textContent = 'No art yet.';
         return;
@@ -457,7 +508,12 @@ function shuffle(array) {
 }
 
 function buildQuiz() {
-  if (state.collected.length < 2) {
+  const pool =
+    state.quizFilter === 'all'
+      ? state.collected
+      : state.collected.filter((item) => item.language === state.quizFilter);
+
+  if (pool.length < 2) {
     quizMeta.textContent = 'Collect at least 2 words to start the quiz.';
     quizQuestion.textContent = '—';
     quizOptions.innerHTML = '';
@@ -465,7 +521,7 @@ function buildQuiz() {
     return;
   }
 
-  const questions = shuffle(state.collected).slice(0, 8).map((entry) => {
+  const questions = shuffle(pool).slice(0, 8).map((entry) => {
     const type = shuffle(['meaning', 'translation', 'pronunciation'])[0];
     return { type, entry };
   });
@@ -499,7 +555,11 @@ function renderQuizQuestion() {
   state.quiz.locked = false;
 
   const entry = current.entry;
-  const optionsPool = shuffle(state.collected.filter((item) => item.id !== entry.id)).slice(0, 3);
+  const optionsPool = shuffle(
+    state.quizFilter === 'all'
+      ? state.collected.filter((item) => item.id !== entry.id)
+      : state.collected.filter((item) => item.language === state.quizFilter && item.id !== entry.id),
+  ).slice(0, 3);
 
   let questionText = '';
   let correct = '';
@@ -583,11 +643,48 @@ viewButtons.forEach((btn) => {
   btn.addEventListener('click', () => setView(btn.dataset.view));
 });
 
+function updateFilterUI() {
+  if (galleryFilter) {
+    galleryFilter.querySelectorAll('.filter-btn').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.filter === state.galleryFilter);
+    });
+  }
+  if (quizFilter) {
+    quizFilter.querySelectorAll('.filter-btn').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.filter === state.quizFilter);
+    });
+  }
+}
+
+if (galleryFilter) {
+  galleryFilter.querySelectorAll('.filter-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.galleryFilter = btn.dataset.filter;
+      updateFilterUI();
+      renderGallery();
+    });
+  });
+}
+
+if (quizFilter) {
+  quizFilter.querySelectorAll('.filter-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.quizFilter = btn.dataset.filter;
+      updateFilterUI();
+      buildQuiz();
+    });
+  });
+}
+
 function init() {
   state.collected = storage.load('www.collected', []);
   const favs = storage.load('www.favorites', []);
   state.favorites = new Set(favs);
+  state.galleryFilter = state.lang;
+  state.quizFilter = state.lang;
+  updateFilterUI();
   loadWord({ forceNew: false });
+  Object.keys(LANG_CONFIG).forEach((lang) => prefetchWord(lang));
 }
 
 init();
