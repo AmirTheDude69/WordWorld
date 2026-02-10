@@ -13,6 +13,10 @@ async function readJson(req) {
   });
 }
 
+function asBase64(buffer) {
+  return Buffer.from(buffer).toString('base64');
+}
+
 module.exports = async (req, res) => {
   if (req.method === 'GET') {
     res.status(200).json({ error: 'Use POST with JSON { prompt } to generate an image.' });
@@ -48,7 +52,6 @@ module.exports = async (req, res) => {
           prompt: body.prompt,
           size: '1024x1024',
           quality: 'medium',
-          response_format: 'b64_json',
         }),
       });
 
@@ -64,7 +67,15 @@ module.exports = async (req, res) => {
     }
 
     const payload = await response.json();
-    const imageBase64 = payload.data?.[0]?.b64_json;
+    let imageBase64 = payload.data?.[0]?.b64_json;
+    const imageUrl = payload.data?.[0]?.url;
+
+    if (!imageBase64 && imageUrl) {
+      const imageResponse = await fetch(imageUrl);
+      if (imageResponse.ok) {
+        imageBase64 = asBase64(await imageResponse.arrayBuffer());
+      }
+    }
 
     if (!imageBase64) {
       res.status(500).json({ error: 'No image returned' });

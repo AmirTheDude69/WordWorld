@@ -1,7 +1,15 @@
+const BANK_SIZE = 365;
+
 const LANG_CONFIG = {
   en: { label: 'English', locale: 'en-US', dir: 'ltr' },
   uk: { label: 'Ukrainian', locale: 'uk-UA', dir: 'ltr' },
   fa: { label: 'Persian', locale: 'fa-IR', dir: 'rtl' },
+};
+
+const STORAGE_KEYS = {
+  collected: 'www.collected',
+  favorites: 'www.favorites',
+  indices: 'www.wordIndexByLang',
 };
 
 const wordCard = document.getElementById('wordCard');
@@ -23,6 +31,7 @@ const collectBtn = document.getElementById('collectBtn');
 const speakBtn = document.getElementById('speakBtn');
 
 const langButtons = document.querySelectorAll('.lang-btn');
+const allLangBtn = document.querySelector('.lang-btn[data-lang="all"]');
 const viewButtons = document.querySelectorAll('.nav-btn');
 const views = document.querySelectorAll('.view');
 
@@ -38,7 +47,6 @@ const quizMeta = document.getElementById('quizMeta');
 const quizQuestion = document.getElementById('quizQuestion');
 const quizOptions = document.getElementById('quizOptions');
 const quizNextBtn = document.getElementById('quizNextBtn');
-const allLangBtn = document.querySelector('.lang-btn[data-lang="all"]');
 
 const state = {
   lang: 'en',
@@ -48,9 +56,10 @@ const state = {
   currentImage: null,
   flipped: false,
   loading: false,
+  requestSeq: 0,
   collected: [],
   favorites: new Set(),
-  prefetch: { en: [], uk: [], fa: [] },
+  indices: { en: 0, uk: 0, fa: 0 },
   audioCache: new Map(),
   chat: {},
   quiz: {
@@ -117,8 +126,28 @@ const idb = (() => {
   return { get, set };
 })();
 
-function todayKey() {
-  return new Date().toISOString().slice(0, 10);
+function dayOfYear(date = new Date()) {
+  const start = new Date(date.getFullYear(), 0, 1);
+  const now = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const diff = now - start;
+  return Math.floor(diff / 86400000);
+}
+
+function entryKey(item) {
+  return `${item?.language || ''}|${item?.native || ''}|${item?.meaning_en || ''}`.toLowerCase();
+}
+
+function dedupeCollected(items) {
+  const seen = new Set();
+  const output = [];
+  for (const item of items) {
+    if (!item) continue;
+    const key = entryKey(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push(item);
+  }
+  return output;
 }
 
 function setLoading(isLoading) {
@@ -128,24 +157,38 @@ function setLoading(isLoading) {
   speakBtn.disabled = isLoading;
 }
 
+function updateTopLangUI() {
+  const active = state.view === 'learning' ? state.lang : state.filter;
+  langButtons.forEach((btn) => {
+    const isActive = btn.dataset.lang === active;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+  });
+}
+
 function setView(view) {
   state.view = view;
+
+  if (view === 'learning') {
+    state.filter = state.lang;
+  }
+
   views.forEach((section) => {
     section.classList.toggle('active', section.dataset.view === view);
   });
+
   viewButtons.forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.view === view);
   });
+
   if (allLangBtn) {
     allLangBtn.hidden = view === 'learning';
   }
+
   updateTopLangUI();
-  if (view === 'gallery') {
-    renderGallery();
-  }
-  if (view === 'quiz') {
-    buildQuiz();
-  }
+
+  if (view === 'gallery') renderGallery();
+  if (view === 'quiz') buildQuiz();
 }
 
 function setLanguage(lang) {
@@ -158,12 +201,14 @@ function setLanguage(lang) {
     }
     return;
   }
+
   if (!LANG_CONFIG[lang]) return;
+
   if (state.view === 'learning') {
     state.lang = lang;
     state.filter = lang;
     updateTopLangUI();
-    loadWord({ forceNew: false });
+    loadWord({ advance: false });
   } else {
     state.filter = lang;
     updateTopLangUI();
@@ -172,24 +217,51 @@ function setLanguage(lang) {
   }
 }
 
+function resetArt() {
+  artFrame.classList.remove('loaded');
+  artImage.removeAttribute('src');
+  artLoading.textContent = 'Painting the scene...';
+  state.currentImage = null;
+}
+
+function updateArt(base64) {
+  if (!base64) return;
+  artImage.src = `data:image/png;base64,${base64}`;
+  artFrame.classList.add('loaded');
+  artLoading.textContent = '';
+  state.currentImage = base64;
+}
+
+function renderError(message) {
+  wordPronounce.textContent = 'Offline';
+  wordNative.textContent = 'Try again';
+  wordType.textContent = '—';
+  wordMeaning.textContent = message;
+  sentenceNative.textContent = '—';
+  sentenceRoman.textContent = '—';
+  sentenceMeaning.textContent = '—';
+  resetArt();
+}
+
 function updateCard() {
   if (!state.current) return;
-  const langMeta = LANG_CONFIG[state.lang];
-  const isRtl = langMeta.dir === 'rtl';
+
+  const isRtl = LANG_CONFIG[state.current.language]?.dir === 'rtl';
 
   wordPronounce.textContent = state.current.romanization || '—';
   wordNative.textContent = state.current.native;
-  wordType.textContent = state.current.type;
+  wordType.textContent = state.current.type || 'Phrase';
   wordMeaning.textContent = state.current.meaning_en;
-  sentenceNative.textContent = state.current.sentence.native;
-  sentenceRoman.textContent = state.current.sentence.romanization;
-  sentenceMeaning.textContent = state.current.sentence.meaning_en;
+  sentenceNative.textContent = state.current.sentence?.native || '—';
+  sentenceRoman.textContent = state.current.sentence?.romanization || '—';
+  sentenceMeaning.textContent = state.current.sentence?.meaning_en || '—';
 
   [wordNative, sentenceNative].forEach((el) => {
     el.classList.toggle('rtl', isRtl);
   });
 
-  wordCard.classList.toggle('flipped', state.flipped);
+  state.flipped = false;
+  wordCard.classList.remove('flipped');
 
   const isFavorite = state.favorites.has(state.current.id);
   favBtn.classList.toggle('active', isFavorite);
@@ -198,133 +270,100 @@ function updateCard() {
   resetArt();
 }
 
-function resetArt() {
-  artFrame.classList.remove('loaded');
-  artImage.removeAttribute('src');
-  artLoading.textContent = 'Painting the scene…';
-  state.currentImage = null;
+function persistIndices() {
+  storage.save(STORAGE_KEYS.indices, state.indices);
 }
 
-function updateArt(base64) {
-  if (!base64) return;
-  const dataUrl = `data:image/png;base64,${base64}`;
-  artImage.src = dataUrl;
-  artFrame.classList.add('loaded');
-  artLoading.textContent = '';
-  state.currentImage = base64;
+function advanceIndex(lang) {
+  state.indices[lang] = ((state.indices[lang] + 1) % BANK_SIZE + BANK_SIZE) % BANK_SIZE;
+  persistIndices();
 }
 
-function chatKey() {
-  return state.current ? `chat-${state.current.id}` : 'chat-default';
-}
+async function ensureImageForWord(word, showStatus) {
+  const cached = await idb.get('images', word.id);
+  if (cached) return cached;
 
-function renderChat() {
-  if (!chatBody) return;
-  chatBody.innerHTML = '';
-  const messages = state.chat[chatKey()] || [];
-  messages.forEach((message) => {
-    const bubble = document.createElement('div');
-    bubble.className = `chat-message ${message.role === 'user' ? 'user' : 'ai'}`;
-    bubble.textContent = message.content;
-    chatBody.appendChild(bubble);
-  });
-  chatBody.scrollTop = chatBody.scrollHeight;
-}
-
-async function ensureImage() {
-  if (!state.current) return;
-  const cached = await idb.get('images', state.current.id);
-  if (cached) {
-    updateArt(cached);
-    return;
+  if (showStatus && state.current?.id === word.id) {
+    artLoading.textContent = 'Painting the scene...';
   }
 
-  artLoading.textContent = 'Painting the scene…';
   const res = await fetch('/api/image', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt: state.current.image_prompt }),
+    body: JSON.stringify({ prompt: word.image_prompt }),
   });
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    artLoading.textContent = data.details || data.error || 'Unable to create art.';
-    return;
+    throw new Error(data.details || data.error || 'Unable to create art.');
   }
-  if (data.image_base64) {
-    await idb.set('images', state.current.id, data.image_base64);
-    updateArt(data.image_base64);
+
+  if (!data.image_base64) {
+    throw new Error('No image returned.');
   }
+
+  await idb.set('images', word.id, data.image_base64);
+  return data.image_base64;
 }
 
-async function prefetchWord(lang) {
-  if (!LANG_CONFIG[lang]) return;
-  if (state.prefetch[lang].length >= 2) return;
-  try {
-    const res = await fetch(`/api/word?lang=${lang}`);
-    if (!res.ok) return;
-    const data = await res.json();
-    if (data?.id) state.prefetch[lang].push(data);
-  } catch (err) {
-    // ignore prefetch errors
-  }
-}
-
-async function loadWord({ forceNew }) {
-  setLoading(true);
-  state.flipped = false;
-  wordCard.classList.remove('flipped');
-
-  const cache = storage.load('www.dailyCache', { date: '', items: {} });
-  const today = todayKey();
-  if (!forceNew && cache.date === today && cache.items?.[state.lang]) {
-    state.current = cache.items[state.lang];
-    updateCard();
-    prefetchWord(state.lang);
-    setLoading(false);
-    return;
-  }
+async function ensureImage() {
+  if (!state.current) return;
+  const word = state.current;
 
   try {
-    let data = null;
-    if (state.prefetch[state.lang].length > 0) {
-      data = state.prefetch[state.lang].shift();
-    } else {
-      const res = await fetch(`/api/word?lang=${state.lang}`);
-      data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        const message = data.error || 'Unable to load a new word.';
-        const detail = data.details ? ` (${data.details})` : '';
-        throw new Error(`${message}${detail}`);
-      }
+    const base64 = await ensureImageForWord(word, true);
+    if (state.current?.id === word.id) {
+      updateArt(base64);
     }
-    state.current = data;
-
-    const nextCache = {
-      date: today,
-      items: { ...(cache.items || {}), [state.lang]: data },
-    };
-    storage.save('www.dailyCache', nextCache);
-    updateCard();
-    prefetchWord(state.lang);
   } catch (err) {
-    const message = err?.message || 'Unable to load a new word.';
-    wordPronounce.textContent = message.includes('OPENAI_API_KEY') ? 'API key missing' : 'Offline';
-    wordNative.textContent = 'Try again';
-    wordType.textContent = '—';
-    wordMeaning.textContent = message;
+    if (state.current?.id === word.id) {
+      artLoading.textContent = err?.message || 'Unable to create art.';
+    }
+  }
+}
+
+async function loadWord({ advance }) {
+  const lang = state.lang;
+
+  if (advance) {
+    advanceIndex(lang);
+  }
+
+  const index = state.indices[lang];
+  const requestId = ++state.requestSeq;
+
+  setLoading(true);
+
+  try {
+    const res = await fetch(`/api/word?lang=${lang}&index=${index}`);
+    const data = await res.json().catch(() => ({}));
+
+    if (requestId !== state.requestSeq) return;
+
+    if (!res.ok) {
+      const message = data.error || 'Unable to load a new word.';
+      const detail = data.details ? ` (${data.details})` : '';
+      throw new Error(`${message}${detail}`);
+    }
+
+    if (!data || data.language !== lang) {
+      throw new Error('Language mismatch from word source.');
+    }
+
+    state.current = data;
+    updateCard();
+  } catch (err) {
+    if (requestId !== state.requestSeq) return;
+    renderError(err?.message || 'Unable to load a new word.');
   } finally {
-    setLoading(false);
+    if (requestId === state.requestSeq) {
+      setLoading(false);
+    }
   }
 }
 
 async function collectCurrent() {
-  if (!state.current) return;
-  setLoading(true);
-
-  if (!state.currentImage) {
-    await ensureImage();
-  }
+  if (!state.current || state.loading) return;
 
   const entry = {
     ...state.current,
@@ -332,32 +371,55 @@ async function collectCurrent() {
     collectedAt: new Date().toISOString(),
   };
 
-  const exists = state.collected.find((item) => item.id === entry.id);
-  if (!exists) {
+  const key = entryKey(entry);
+  const idx = state.collected.findIndex((item) => entryKey(item) === key);
+  if (idx === -1) {
     state.collected.unshift(entry);
+  } else {
+    state.collected[idx] = { ...state.collected[idx], ...entry };
   }
 
-  storage.save('www.collected', state.collected);
-  setLoading(false);
-  renderGallery();
-  loadWord({ forceNew: true });
+  state.collected = dedupeCollected(state.collected);
+  storage.save(STORAGE_KEYS.collected, state.collected);
+
+  if (!state.currentImage) {
+    ensureImageForWord(state.current, false).catch(() => {});
+  }
+
+  if (state.view === 'gallery') {
+    renderGallery();
+  }
+
+  await loadWord({ advance: true });
+}
+
+function skipCurrent() {
+  if (state.loading) return;
+  loadWord({ advance: true });
 }
 
 function toggleFavorite() {
   if (!state.current) return;
+
   if (state.favorites.has(state.current.id)) {
     state.favorites.delete(state.current.id);
   } else {
     state.favorites.add(state.current.id);
   }
-  storage.save('www.favorites', Array.from(state.favorites));
+
+  storage.save(STORAGE_KEYS.favorites, Array.from(state.favorites));
   updateCard();
-  renderGallery();
+
+  if (state.view === 'gallery') {
+    renderGallery();
+  }
 }
 
 function toggleFlip() {
+  if (!state.current) return;
   state.flipped = !state.flipped;
   wordCard.classList.toggle('flipped', state.flipped);
+
   if (state.flipped && !state.currentImage) {
     ensureImage();
   }
@@ -365,52 +427,68 @@ function toggleFlip() {
 
 async function speakWord() {
   if (!state.current) return;
+
   const text = state.current.native;
   const cacheKey = `audio-${state.current.id}`;
 
-  if (state.audioCache.has(cacheKey)) {
-    const url = state.audioCache.get(cacheKey);
-    const audio = new Audio(url);
-    audio.play();
-    return;
-  }
-
-  const cached = await idb.get('audio', cacheKey);
-  if (cached) {
-    const url = URL.createObjectURL(cached);
-    state.audioCache.set(cacheKey, url);
-    const audio = new Audio(url);
-    audio.play();
-    return;
-  }
-
   try {
+    if (state.audioCache.has(cacheKey)) {
+      new Audio(state.audioCache.get(cacheKey)).play();
+      return;
+    }
+
+    const cached = await idb.get('audio', cacheKey);
+    if (cached) {
+      const cachedUrl = URL.createObjectURL(cached);
+      state.audioCache.set(cacheKey, cachedUrl);
+      new Audio(cachedUrl).play();
+      return;
+    }
+
     const res = await fetch('/api/speech', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text, lang: state.lang }),
     });
 
-    if (!res.ok) throw new Error('TTS failed');
+    if (!res.ok) return;
 
     const blob = await res.blob();
     await idb.set('audio', cacheKey, blob);
     const url = URL.createObjectURL(blob);
     state.audioCache.set(cacheKey, url);
-    const audio = new Audio(url);
-    audio.play();
+    new Audio(url).play();
   } catch (err) {
-    // Keep OpenAI TTS as the only pronunciation source.
+    // Intentionally keep OpenAI TTS as the only source for pronunciation quality consistency.
   }
+}
+
+function chatKey() {
+  return state.current ? `chat-${state.current.id}` : 'chat-default';
+}
+
+function renderChat() {
+  chatBody.innerHTML = '';
+  const messages = state.chat[chatKey()] || [];
+
+  messages.forEach((message) => {
+    const bubble = document.createElement('div');
+    bubble.className = `chat-message ${message.role === 'user' ? 'user' : 'ai'}`;
+    bubble.textContent = message.content;
+    chatBody.appendChild(bubble);
+  });
+
+  chatBody.scrollTop = chatBody.scrollHeight;
 }
 
 function openAskModal() {
   askInput.value = '';
-  if (!state.chat[chatKey()]) {
-    state.chat[chatKey()] = [
-      { role: 'assistant', content: 'Ask me anything about this word or phrase.' },
-    ];
+
+  const key = chatKey();
+  if (!state.chat[key]) {
+    state.chat[key] = [{ role: 'assistant', content: 'Ask me anything about this word or phrase.' }];
   }
+
   renderChat();
   askModal.classList.remove('hidden');
   askModal.setAttribute('aria-hidden', 'false');
@@ -429,36 +507,38 @@ async function sendAskQuestion() {
 
   const key = chatKey();
   if (!state.chat[key]) state.chat[key] = [];
+
   state.chat[key].push({ role: 'user', content: question });
-  const placeholderIndex = state.chat[key].length;
-  state.chat[key].push({ role: 'assistant', content: 'Thinking…' });
-  renderChat();
+  const pendingIndex = state.chat[key].length;
+  state.chat[key].push({ role: 'assistant', content: 'Thinking...' });
   askInput.value = '';
+  renderChat();
 
   try {
     const res = await fetch('/api/ask', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: state.chat[key].slice(-6), word: state.current }),
+      body: JSON.stringify({ messages: state.chat[key].slice(-8), word: state.current }),
     });
-    if (!res.ok) throw new Error('Ask failed');
-    const data = await res.json();
-    state.chat[key][placeholderIndex] = {
+
+    const data = await res.json().catch(() => ({}));
+    state.chat[key][pendingIndex] = {
       role: 'assistant',
-      content: data.answer || 'No response yet.',
+      content: res.ok ? data.answer || 'No response yet.' : 'Unable to reach the tutor right now.',
     };
-    renderChat();
   } catch (err) {
-    state.chat[key][placeholderIndex] = {
+    state.chat[key][pendingIndex] = {
       role: 'assistant',
       content: 'Unable to reach the tutor right now.',
     };
-    renderChat();
   }
+
+  renderChat();
 }
 
 function renderGallery() {
   galleryGrid.innerHTML = '';
+
   const filtered =
     state.filter === 'all'
       ? state.collected
@@ -484,12 +564,15 @@ function renderGallery() {
 
     const meta = document.createElement('div');
     meta.className = 'card-meta';
+
     const pronounce = document.createElement('span');
     pronounce.className = 'pronounce';
     pronounce.textContent = entry.romanization;
+
     const badge = document.createElement('span');
     badge.className = 'type-pill';
     badge.textContent = entry.type;
+
     meta.append(pronounce, badge);
 
     const native = document.createElement('h2');
@@ -508,28 +591,35 @@ function renderGallery() {
 
     const frame = document.createElement('div');
     frame.className = 'art-frame';
+
     const loading = document.createElement('div');
     loading.className = 'art-loading';
-    loading.textContent = 'Loading art…';
+    loading.textContent = 'Loading art...';
+
     const img = document.createElement('img');
     img.alt = 'Collected illustration';
+
     frame.append(loading, img);
 
     const sentence = document.createElement('div');
     sentence.className = 'sentence';
+
     const sNative = document.createElement('p');
     sNative.className = 'sentence-native';
     sNative.textContent = entry.sentence.native;
     if (LANG_CONFIG[entry.language]?.dir === 'rtl') sNative.classList.add('rtl');
+
     const sRoman = document.createElement('p');
     sRoman.className = 'sentence-roman';
     sRoman.textContent = entry.sentence.romanization;
+
     const sMeaning = document.createElement('p');
     sMeaning.className = 'sentence-meaning';
     sMeaning.textContent = entry.sentence.meaning_en;
-    sentence.append(sNative, sRoman, sMeaning);
 
+    sentence.append(sNative, sRoman, sMeaning);
     back.append(frame, sentence);
+
     flip.append(front, back);
     cardWrapper.appendChild(flip);
     galleryGrid.appendChild(cardWrapper);
@@ -571,10 +661,10 @@ function buildQuiz() {
     return;
   }
 
-  const questions = shuffle(pool).slice(0, 8).map((entry) => {
-    const type = shuffle(['meaning', 'translation', 'pronunciation'])[0];
-    return { type, entry };
-  });
+  const questions = shuffle(pool).slice(0, 8).map((entry) => ({
+    type: shuffle(['meaning', 'translation', 'pronunciation'])[0],
+    entry,
+  }));
 
   state.quiz = {
     questions,
@@ -589,6 +679,7 @@ function buildQuiz() {
 function renderQuizQuestion() {
   const { questions, index, score } = state.quiz;
   const current = questions[index];
+
   if (!current) {
     quizMeta.textContent = `Done! Score ${score}/${questions.length}`;
     quizQuestion.textContent = 'Great job!';
@@ -605,11 +696,12 @@ function renderQuizQuestion() {
   state.quiz.locked = false;
 
   const entry = current.entry;
-  const optionsPool = shuffle(
+  const optionPoolBase =
     state.filter === 'all'
       ? state.collected.filter((item) => item.id !== entry.id)
-      : state.collected.filter((item) => item.language === state.filter && item.id !== entry.id),
-  ).slice(0, 3);
+      : state.collected.filter((item) => item.language === state.filter && item.id !== entry.id);
+
+  const optionsPool = shuffle(optionPoolBase).slice(0, 3);
 
   let questionText = '';
   let correct = '';
@@ -620,7 +712,7 @@ function renderQuizQuestion() {
     correct = entry.meaning_en;
     options = shuffle([correct, ...optionsPool.map((item) => item.meaning_en)]);
   } else if (current.type === 'translation') {
-    questionText = `Pick the ${LANG_CONFIG[entry.language]?.label || ''} word for: ${entry.meaning_en}`;
+    questionText = `Pick the ${LANG_CONFIG[entry.language]?.label || ''} phrase for: ${entry.meaning_en}`;
     correct = entry.native;
     options = shuffle([correct, ...optionsPool.map((item) => item.native)]);
   } else {
@@ -629,7 +721,7 @@ function renderQuizQuestion() {
     options = shuffle([correct, ...optionsPool.map((item) => item.romanization)]);
   }
 
-  quizMeta.textContent = `Question ${index + 1}/${questions.length} · Score ${score}`;
+  quizMeta.textContent = `Question ${index + 1}/${questions.length} - Score ${score}`;
   quizQuestion.textContent = questionText;
 
   options.forEach((option) => {
@@ -644,25 +736,24 @@ function renderQuizQuestion() {
 function handleAnswer(btn, isCorrect) {
   if (state.quiz.locked) return;
   state.quiz.locked = true;
-  const { questions, index } = state.quiz;
 
+  const { questions, index } = state.quiz;
   const buttons = quizOptions.querySelectorAll('.quiz-option');
+
   buttons.forEach((button) => {
-    const isAnswer = button === btn;
-    if (isAnswer && isCorrect) button.classList.add('correct');
-    if (isAnswer && !isCorrect) button.classList.add('wrong');
+    if (button === btn && isCorrect) button.classList.add('correct');
+    if (button === btn && !isCorrect) button.classList.add('wrong');
   });
 
   if (isCorrect) state.quiz.score += 1;
-  quizNextBtn.disabled = false;
 
+  quizNextBtn.disabled = false;
   quizNextBtn.onclick = () => {
+    state.quiz.index += 1;
     if (!questions[index + 1]) {
-      state.quiz.index += 1;
       renderQuizQuestion();
       return;
     }
-    state.quiz.index += 1;
     renderQuizQuestion();
   };
 }
@@ -672,7 +763,7 @@ wordCard.addEventListener('click', (event) => {
   toggleFlip();
 });
 
-skipBtn.addEventListener('click', () => loadWord({ forceNew: true }));
+skipBtn.addEventListener('click', skipCurrent);
 collectBtn.addEventListener('click', collectCurrent);
 favBtn.addEventListener('click', toggleFavorite);
 speakBtn.addEventListener('click', speakWord);
@@ -682,7 +773,6 @@ closeAsk.addEventListener('click', closeAskModal);
 askModal.addEventListener('click', (event) => {
   if (event.target === askModal) closeAskModal();
 });
-
 sendAsk.addEventListener('click', sendAskQuestion);
 
 langButtons.forEach((btn) => {
@@ -693,23 +783,44 @@ viewButtons.forEach((btn) => {
   btn.addEventListener('click', () => setView(btn.dataset.view));
 });
 
-function updateTopLangUI() {
-  const active = state.view === 'learning' ? state.lang : state.filter;
-  langButtons.forEach((btn) => {
-    const isActive = btn.dataset.lang === active;
-    btn.classList.toggle('active', isActive);
-    btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
-  });
+function initIndices() {
+  const saved = storage.load(STORAGE_KEYS.indices, null);
+  if (
+    saved &&
+    Number.isFinite(saved.en) &&
+    Number.isFinite(saved.uk) &&
+    Number.isFinite(saved.fa)
+  ) {
+    state.indices = {
+      en: ((Math.trunc(saved.en) % BANK_SIZE) + BANK_SIZE) % BANK_SIZE,
+      uk: ((Math.trunc(saved.uk) % BANK_SIZE) + BANK_SIZE) % BANK_SIZE,
+      fa: ((Math.trunc(saved.fa) % BANK_SIZE) + BANK_SIZE) % BANK_SIZE,
+    };
+    return;
+  }
+
+  const base = dayOfYear() % BANK_SIZE;
+  state.indices = {
+    en: base,
+    uk: (base + 121) % BANK_SIZE,
+    fa: (base + 243) % BANK_SIZE,
+  };
+  persistIndices();
 }
 
 function init() {
-  state.collected = storage.load('www.collected', []);
-  const favs = storage.load('www.favorites', []);
-  state.favorites = new Set(favs);
+  initIndices();
+  state.collected = dedupeCollected(storage.load(STORAGE_KEYS.collected, []));
+  storage.save(STORAGE_KEYS.collected, state.collected);
+  state.favorites = new Set(storage.load(STORAGE_KEYS.favorites, []));
+
+  if (allLangBtn) {
+    allLangBtn.hidden = true;
+  }
+
   state.filter = state.lang;
   updateTopLangUI();
-  loadWord({ forceNew: false });
-  Object.keys(LANG_CONFIG).forEach((lang) => prefetchWord(lang));
+  loadWord({ advance: false });
 }
 
 init();
