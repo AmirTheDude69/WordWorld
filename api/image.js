@@ -17,6 +17,40 @@ function asBase64(buffer) {
   return Buffer.from(buffer).toString('base64');
 }
 
+function buildOpenAIHeaders(apiKey) {
+  const headers = {
+    Authorization: `Bearer ${apiKey}`,
+    'Content-Type': 'application/json',
+  };
+  if (process.env.OPENAI_PROJECT_ID) {
+    headers['OpenAI-Project'] = process.env.OPENAI_PROJECT_ID;
+  }
+  if (process.env.OPENAI_ORG_ID) {
+    headers['OpenAI-Organization'] = process.env.OPENAI_ORG_ID;
+  }
+  return headers;
+}
+
+function parseOpenAIError(text) {
+  try {
+    const payload = JSON.parse(text || '{}');
+    const err = payload?.error || payload;
+    return {
+      message: err?.message || text || 'Unknown OpenAI error.',
+      code: err?.code || null,
+      type: err?.type || null,
+      param: err?.param || null,
+    };
+  } catch (err) {
+    return {
+      message: text || 'Unknown OpenAI error.',
+      code: null,
+      type: null,
+      param: null,
+    };
+  }
+}
+
 module.exports = async (req, res) => {
   if (req.method === 'GET') {
     res.status(200).json({ error: 'Use POST with JSON { prompt } to generate an image.' });
@@ -40,13 +74,11 @@ module.exports = async (req, res) => {
   }
 
   try {
+    const headers = buildOpenAIHeaders(apiKey);
     const makeRequest = async (model, size) =>
       fetch('https://api.openai.com/v1/images/generations', {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify({
           model,
           prompt: body.prompt,
@@ -63,18 +95,44 @@ module.exports = async (req, res) => {
     ];
 
     let response = null;
-    let lastErrorText = '';
+    let lastError = null;
+    const attemptErrors = [];
     for (const attempt of attempts) {
       const candidate = await makeRequest(attempt.model, attempt.size);
       if (candidate.ok) {
         response = candidate;
         break;
       }
-      lastErrorText = await candidate.text();
+      const rawText = await candidate.text();
+      const parsed = parseOpenAIError(rawText);
+      lastError = parsed;
+      attemptErrors.push({
+        model: attempt.model,
+        size: attempt.size,
+        status: candidate.status,
+        code: parsed.code,
+        message: parsed.message,
+      });
+
+      if (parsed.code === 'billing_hard_limit_reached') {
+        res.status(402).json({
+          error: 'OpenAI billing hard limit reached for the key/project used by this deployment.',
+          code: parsed.code,
+          details: parsed.message,
+          hint:
+            'This usually means your Vercel OPENAI_API_KEY belongs to a different OpenAI project/org than the dashboard you checked. Use a key from the intended project, and optionally set OPENAI_PROJECT_ID / OPENAI_ORG_ID in Vercel.',
+          attempts: attemptErrors,
+        });
+        return;
+      }
     }
 
     if (!response) {
-      res.status(500).json({ error: 'Image generation failed', details: lastErrorText || 'No successful image response.' });
+      res.status(500).json({
+        error: 'Image generation failed',
+        details: lastError?.message || 'No successful image response.',
+        attempts: attemptErrors,
+      });
       return;
     }
 

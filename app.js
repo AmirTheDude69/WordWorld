@@ -400,6 +400,20 @@ function normalizeSentenceLines(entry) {
   };
 }
 
+function estimateGlyphLength(text) {
+  return Array.from(String(text || '')).length;
+}
+
+function applyGalleryNativeSizing(el, text) {
+  const length = estimateGlyphLength(text);
+  el.classList.remove('size-sm', 'size-xs');
+  if (length >= 18) {
+    el.classList.add('size-xs');
+  } else if (length >= 12) {
+    el.classList.add('size-sm');
+  }
+}
+
 function updateCard() {
   if (!state.current) return;
 
@@ -855,6 +869,7 @@ function renderGallery() {
     const native = document.createElement('h2');
     native.className = 'native-word';
     native.textContent = entry.native;
+    applyGalleryNativeSizing(native, entry.native);
     if (LANG_CONFIG[entry.language]?.dir === 'rtl') native.classList.add('rtl');
 
     const meaning = document.createElement('p');
