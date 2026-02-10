@@ -842,17 +842,13 @@ function renderGallery() {
     front.className = 'card-face card-front';
 
     const meta = document.createElement('div');
-    meta.className = 'card-meta';
-
-    const pronounce = document.createElement('span');
-    pronounce.className = 'pronounce';
-    pronounce.textContent = entry.romanization;
+    meta.className = 'card-meta gallery-front-meta';
 
     const badge = document.createElement('span');
     badge.className = 'type-pill';
     badge.textContent = entry.type;
 
-    meta.append(pronounce, badge);
+    meta.append(badge);
 
     const preview = document.createElement('div');
     preview.className = 'art-frame gallery-preview';
