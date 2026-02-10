@@ -36,6 +36,9 @@
           <button class="lang-btn" data-lang="fa" role="tab" aria-selected="false">
             🇮🇷 Persian
           </button>
+          <button class="lang-btn all-btn" data-lang="all" role="tab" aria-selected="false" hidden>
+            ✨ All
+          </button>
         </div>
       </header>
 
@@ -96,12 +99,6 @@
           <h3>Gallery</h3>
           <p>All your collected words, ready to flip anytime.</p>
         </div>
-        <div class="filter-switch" id="galleryFilter">
-          <button class="filter-btn active" data-filter="all">All</button>
-          <button class="filter-btn" data-filter="en">English</button>
-          <button class="filter-btn" data-filter="uk">Ukrainian</button>
-          <button class="filter-btn" data-filter="fa">Persian</button>
-        </div>
         <div class="gallery-grid" id="galleryGrid"></div>
       </section>
 
@@ -109,12 +106,6 @@
         <div class="section-head">
           <h3>Quick Quiz</h3>
           <p>Mixing meanings, translations, and pronunciations.</p>
-        </div>
-        <div class="filter-switch" id="quizFilter">
-          <button class="filter-btn active" data-filter="en">English</button>
-          <button class="filter-btn" data-filter="uk">Ukrainian</button>
-          <button class="filter-btn" data-filter="fa">Persian</button>
-          <button class="filter-btn" data-filter="all">All</button>
         </div>
         <div class="quiz-card" id="quizCard">
           <div class="quiz-meta" id="quizMeta">Collect words to start the quiz.</div>
@@ -137,9 +128,11 @@
           <h3>Ask AI</h3>
           <button class="close-btn" id="closeAsk">✕</button>
         </header>
-        <textarea id="askInput" placeholder="Ask about pronunciation, usage, or nuance..."></textarea>
-        <button class="collect-btn" id="sendAsk">Send</button>
-        <div class="answer" id="askAnswer"></div>
+        <div class="chat-body" id="chatBody"></div>
+        <div class="chat-input">
+          <textarea id="askInput" placeholder="Ask about pronunciation, usage, or nuance..."></textarea>
+          <button class="collect-btn" id="sendAsk">Send</button>
+        </div>
       </div>
     </section>
 

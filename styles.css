@@ -334,28 +334,8 @@ h1 {
   color: var(--muted);
 }
 
-.filter-switch {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-top: 10px;
-}
-
-.filter-btn {
-  border: 1px solid rgba(20, 18, 31, 0.08);
-  background: var(--surface);
-  padding: 8px 14px;
-  border-radius: 999px;
-  font-weight: 600;
-  font-size: 13px;
-  cursor: pointer;
-  transition: all 180ms ease;
-}
-
-.filter-btn.active {
-  background: #111827;
-  color: #fff;
-  border-color: transparent;
+.all-btn[hidden] {
+  display: none;
 }
 
 .gallery-grid {
@@ -491,12 +471,42 @@ h1 {
   border: 1px solid rgba(20, 18, 31, 0.1);
 }
 
-.answer {
+.chat-body {
+  min-height: 220px;
+  max-height: 320px;
+  overflow-y: auto;
+  display: grid;
+  gap: 12px;
+  padding: 10px 4px;
+}
+
+.chat-message {
+  max-width: 85%;
+  padding: 10px 14px;
+  border-radius: 14px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.chat-message.user {
+  justify-self: end;
+  background: #111827;
+  color: #fff;
+}
+
+.chat-message.ai {
+  justify-self: start;
   background: #f8fafc;
-  padding: 12px;
-  border-radius: 12px;
   color: var(--muted);
-  min-height: 60px;
+}
+
+.chat-input {
+  display: grid;
+  gap: 10px;
+}
+
+.chat-input textarea {
+  min-height: 100px;
 }
 
 @media (max-width: 720px) {

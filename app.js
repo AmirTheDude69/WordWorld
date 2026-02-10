@@ -30,7 +30,7 @@ const galleryGrid = document.getElementById('galleryGrid');
 
 const askModal = document.getElementById('askModal');
 const askInput = document.getElementById('askInput');
-const askAnswer = document.getElementById('askAnswer');
+const chatBody = document.getElementById('chatBody');
 const sendAsk = document.getElementById('sendAsk');
 const closeAsk = document.getElementById('closeAsk');
 
@@ -38,22 +38,21 @@ const quizMeta = document.getElementById('quizMeta');
 const quizQuestion = document.getElementById('quizQuestion');
 const quizOptions = document.getElementById('quizOptions');
 const quizNextBtn = document.getElementById('quizNextBtn');
-const galleryFilter = document.getElementById('galleryFilter');
-const quizFilter = document.getElementById('quizFilter');
+const allLangBtn = document.querySelector('.lang-btn[data-lang="all"]');
 
 const state = {
   lang: 'en',
   view: 'learning',
+  filter: 'en',
   current: null,
   currentImage: null,
   flipped: false,
   loading: false,
   collected: [],
   favorites: new Set(),
-  galleryFilter: 'en',
-  quizFilter: 'en',
   prefetch: { en: [], uk: [], fa: [] },
   audioCache: new Map(),
+  chat: {},
   quiz: {
     questions: [],
     index: 0,
@@ -137,6 +136,10 @@ function setView(view) {
   viewButtons.forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.view === view);
   });
+  if (allLangBtn) {
+    allLangBtn.hidden = view === 'learning';
+  }
+  updateTopLangUI();
   if (view === 'gallery') {
     renderGallery();
   }
@@ -146,17 +149,27 @@ function setView(view) {
 }
 
 function setLanguage(lang) {
+  if (lang === 'all') {
+    if (state.view !== 'learning') {
+      state.filter = 'all';
+      updateTopLangUI();
+      if (state.view === 'gallery') renderGallery();
+      if (state.view === 'quiz') buildQuiz();
+    }
+    return;
+  }
   if (!LANG_CONFIG[lang]) return;
-  state.lang = lang;
-  state.galleryFilter = lang;
-  state.quizFilter = lang;
-  updateFilterUI();
-  langButtons.forEach((btn) => {
-    const active = btn.dataset.lang === lang;
-    btn.classList.toggle('active', active);
-    btn.setAttribute('aria-selected', active ? 'true' : 'false');
-  });
-  loadWord({ forceNew: false });
+  if (state.view === 'learning') {
+    state.lang = lang;
+    state.filter = lang;
+    updateTopLangUI();
+    loadWord({ forceNew: false });
+  } else {
+    state.filter = lang;
+    updateTopLangUI();
+    if (state.view === 'gallery') renderGallery();
+    if (state.view === 'quiz') buildQuiz();
+  }
 }
 
 function updateCard() {
@@ -201,6 +214,23 @@ function updateArt(base64) {
   state.currentImage = base64;
 }
 
+function chatKey() {
+  return state.current ? `chat-${state.current.id}` : 'chat-default';
+}
+
+function renderChat() {
+  if (!chatBody) return;
+  chatBody.innerHTML = '';
+  const messages = state.chat[chatKey()] || [];
+  messages.forEach((message) => {
+    const bubble = document.createElement('div');
+    bubble.className = `chat-message ${message.role === 'user' ? 'user' : 'ai'}`;
+    bubble.textContent = message.content;
+    chatBody.appendChild(bubble);
+  });
+  chatBody.scrollTop = chatBody.scrollHeight;
+}
+
 async function ensureImage() {
   if (!state.current) return;
   const cached = await idb.get('images', state.current.id);
@@ -218,7 +248,7 @@ async function ensureImage() {
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    artLoading.textContent = data.error || data.details || 'Unable to create art.';
+    artLoading.textContent = data.details || data.error || 'Unable to create art.';
     return;
   }
   if (data.image_base64) {
@@ -310,6 +340,7 @@ async function collectCurrent() {
   storage.save('www.collected', state.collected);
   setLoading(false);
   renderGallery();
+  loadWord({ forceNew: true });
 }
 
 function toggleFavorite() {
@@ -375,7 +406,12 @@ async function speakWord() {
 
 function openAskModal() {
   askInput.value = '';
-  askAnswer.textContent = '';
+  if (!state.chat[chatKey()]) {
+    state.chat[chatKey()] = [
+      { role: 'assistant', content: 'Ask me anything about this word or phrase.' },
+    ];
+  }
+  renderChat();
   askModal.classList.remove('hidden');
   askModal.setAttribute('aria-hidden', 'false');
   askInput.focus();
@@ -391,28 +427,42 @@ async function sendAskQuestion() {
   const question = askInput.value.trim();
   if (!question) return;
 
-  askAnswer.textContent = 'Thinking…';
+  const key = chatKey();
+  if (!state.chat[key]) state.chat[key] = [];
+  state.chat[key].push({ role: 'user', content: question });
+  const placeholderIndex = state.chat[key].length;
+  state.chat[key].push({ role: 'assistant', content: 'Thinking…' });
+  renderChat();
+  askInput.value = '';
 
   try {
     const res = await fetch('/api/ask', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question, word: state.current }),
+      body: JSON.stringify({ messages: state.chat[key].slice(-6), word: state.current }),
     });
     if (!res.ok) throw new Error('Ask failed');
     const data = await res.json();
-    askAnswer.textContent = data.answer || 'No response yet.';
+    state.chat[key][placeholderIndex] = {
+      role: 'assistant',
+      content: data.answer || 'No response yet.',
+    };
+    renderChat();
   } catch (err) {
-    askAnswer.textContent = 'Unable to reach the tutor right now.';
+    state.chat[key][placeholderIndex] = {
+      role: 'assistant',
+      content: 'Unable to reach the tutor right now.',
+    };
+    renderChat();
   }
 }
 
 function renderGallery() {
   galleryGrid.innerHTML = '';
   const filtered =
-    state.galleryFilter === 'all'
+    state.filter === 'all'
       ? state.collected
-      : state.collected.filter((item) => item.language === state.galleryFilter);
+      : state.collected.filter((item) => item.language === state.filter);
 
   if (!filtered.length) {
     const empty = document.createElement('p');
@@ -509,9 +559,9 @@ function shuffle(array) {
 
 function buildQuiz() {
   const pool =
-    state.quizFilter === 'all'
+    state.filter === 'all'
       ? state.collected
-      : state.collected.filter((item) => item.language === state.quizFilter);
+      : state.collected.filter((item) => item.language === state.filter);
 
   if (pool.length < 2) {
     quizMeta.textContent = 'Collect at least 2 words to start the quiz.';
@@ -556,9 +606,9 @@ function renderQuizQuestion() {
 
   const entry = current.entry;
   const optionsPool = shuffle(
-    state.quizFilter === 'all'
+    state.filter === 'all'
       ? state.collected.filter((item) => item.id !== entry.id)
-      : state.collected.filter((item) => item.language === state.quizFilter && item.id !== entry.id),
+      : state.collected.filter((item) => item.language === state.filter && item.id !== entry.id),
   ).slice(0, 3);
 
   let questionText = '';
@@ -643,36 +693,12 @@ viewButtons.forEach((btn) => {
   btn.addEventListener('click', () => setView(btn.dataset.view));
 });
 
-function updateFilterUI() {
-  if (galleryFilter) {
-    galleryFilter.querySelectorAll('.filter-btn').forEach((btn) => {
-      btn.classList.toggle('active', btn.dataset.filter === state.galleryFilter);
-    });
-  }
-  if (quizFilter) {
-    quizFilter.querySelectorAll('.filter-btn').forEach((btn) => {
-      btn.classList.toggle('active', btn.dataset.filter === state.quizFilter);
-    });
-  }
-}
-
-if (galleryFilter) {
-  galleryFilter.querySelectorAll('.filter-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      state.galleryFilter = btn.dataset.filter;
-      updateFilterUI();
-      renderGallery();
-    });
-  });
-}
-
-if (quizFilter) {
-  quizFilter.querySelectorAll('.filter-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      state.quizFilter = btn.dataset.filter;
-      updateFilterUI();
-      buildQuiz();
-    });
+function updateTopLangUI() {
+  const active = state.view === 'learning' ? state.lang : state.filter;
+  langButtons.forEach((btn) => {
+    const isActive = btn.dataset.lang === active;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
   });
 }
 
@@ -680,9 +706,8 @@ function init() {
   state.collected = storage.load('www.collected', []);
   const favs = storage.load('www.favorites', []);
   state.favorites = new Set(favs);
-  state.galleryFilter = state.lang;
-  state.quizFilter = state.lang;
-  updateFilterUI();
+  state.filter = state.lang;
+  updateTopLangUI();
   loadWord({ forceNew: false });
   Object.keys(LANG_CONFIG).forEach((lang) => prefetchWord(lang));
 }

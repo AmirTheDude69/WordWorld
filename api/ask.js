@@ -33,19 +33,28 @@ module.exports = async (req, res) => {
   }
 
   const body = await readJson(req);
-  const question = body.question;
   const word = body.word;
-  if (!question || !word) {
-    res.status(400).json({ error: 'Missing question or word' });
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  const question = body.question;
+  if (!word || (!question && messages.length === 0)) {
+    res.status(400).json({ error: 'Missing question/messages or word' });
     return;
   }
 
   const system =
     'You are a concise, friendly language tutor. Answer clearly with usage tips, pronunciation help, or nuance. Keep it under 80 words.';
 
-  const prompt = `Word info:\n- Language: ${word.language}\n- Native: ${word.native}\n- Romanization: ${word.romanization}\n- Meaning: ${word.meaning_en}\n- Example: ${word.sentence?.native} / ${word.sentence?.meaning_en}\n\nQuestion: ${question}`;
+  const baseContext = `Word info:\n- Language: ${word.language}\n- Native: ${word.native}\n- Romanization: ${word.romanization}\n- Meaning: ${word.meaning_en}\n- Example: ${word.sentence?.native} / ${word.sentence?.meaning_en}`;
 
   try {
+    const conversation =
+      messages.length > 0
+        ? messages.map((item) => ({
+            role: item.role === 'assistant' ? 'assistant' : 'user',
+            content: item.content,
+          }))
+        : [{ role: 'user', content: question }];
+
     const response = await fetch('https://api.openai.com/v1/responses', {
       method: 'POST',
       headers: {
@@ -56,7 +65,8 @@ module.exports = async (req, res) => {
         model: 'gpt-4.1',
         input: [
           { role: 'system', content: system },
-          { role: 'user', content: prompt },
+          { role: 'user', content: baseContext },
+          ...conversation,
         ],
         temperature: 0.6,
       }),

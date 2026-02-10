@@ -14,6 +14,10 @@ async function readJson(req) {
 }
 
 module.exports = async (req, res) => {
+  if (req.method === 'GET') {
+    res.status(200).json({ error: 'Use POST with JSON { prompt } to generate an image.' });
+    return;
+  }
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method not allowed' });
     return;
