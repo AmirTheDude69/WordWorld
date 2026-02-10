@@ -31,20 +31,64 @@ module.exports = async (req, res) => {
     return;
   }
 
-  try {
-    const response = await fetch('https://api.openai.com/v1/audio/speech', {
+  const lang = String(body.lang || 'en').toLowerCase();
+  const voiceProfiles = {
+    en: {
+      model: 'tts-1-hd',
+      voice: 'nova',
+      speed: 1.0,
+      instructions: null,
+    },
+    uk: {
+      model: 'gpt-4o-mini-tts',
+      voice: 'alloy',
+      speed: 0.9,
+      instructions: 'Speak in clear standard Ukrainian with native pronunciation. Do not transliterate or translate.',
+    },
+    fa: {
+      model: 'gpt-4o-mini-tts',
+      voice: 'alloy',
+      speed: 0.88,
+      instructions: 'Speak in clear standard Persian (Farsi) with native pronunciation. Do not transliterate or translate.',
+    },
+  };
+
+  const primary = voiceProfiles[lang] || voiceProfiles.en;
+
+  async function generateSpeech(payload) {
+    return fetch('https://api.openai.com/v1/audio/speech', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
+      body: JSON.stringify(payload),
+    });
+  }
+
+  try {
+    const primaryPayload = {
+      model: primary.model,
+      voice: primary.voice,
+      input: body.text,
+      response_format: 'mp3',
+      speed: primary.speed,
+    };
+    if (primary.instructions) {
+      primaryPayload.instructions = primary.instructions;
+    }
+
+    let response = await generateSpeech(primaryPayload);
+    if (!response.ok) {
+      // Fallback to high-quality baseline if the multilingual profile is unavailable.
+      response = await generateSpeech({
         model: 'tts-1-hd',
         voice: 'nova',
         input: body.text,
-        format: 'mp3',
-      }),
-    });
+        response_format: 'mp3',
+        speed: 0.95,
+      });
+    }
 
     if (!response.ok) {
       const errText = await response.text();

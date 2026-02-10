@@ -39,6 +39,7 @@ const speakBtn = document.getElementById('speakBtn');
 
 const langButtons = document.querySelectorAll('.lang-btn');
 const allLangBtn = document.querySelector('.lang-btn[data-lang="all"]');
+const favoritesLangBtn = document.querySelector('.lang-btn[data-lang="favorites"]');
 const viewButtons = document.querySelectorAll('.nav-btn');
 const views = document.querySelectorAll('.view');
 
@@ -263,6 +264,8 @@ function setView(view) {
 
   if (view === 'learning') {
     state.filter = state.lang;
+  } else if (view === 'quiz' && state.filter === 'favorites') {
+    state.filter = 'all';
   }
 
   views.forEach((section) => {
@@ -275,6 +278,9 @@ function setView(view) {
 
   if (allLangBtn) {
     allLangBtn.hidden = view === 'learning';
+  }
+  if (favoritesLangBtn) {
+    favoritesLangBtn.hidden = view !== 'gallery';
   }
 
   updateTopLangUI();
@@ -290,6 +296,15 @@ function setLanguage(lang) {
       updateTopLangUI();
       if (state.view === 'gallery') renderGallery();
       if (state.view === 'quiz') buildQuiz();
+    }
+    return;
+  }
+
+  if (lang === 'favorites') {
+    if (state.view === 'gallery') {
+      state.filter = 'favorites';
+      updateTopLangUI();
+      renderGallery();
     }
     return;
   }
@@ -615,7 +630,8 @@ async function speakWord() {
   if (!state.current) return;
 
   const text = state.current.native;
-  const cacheKey = `audio-${state.current.id}`;
+  const lang = state.current.language || state.lang;
+  const cacheKey = `audio-v2-${state.current.id}-${lang}`;
 
   try {
     if (state.audioCache.has(cacheKey)) {
@@ -634,7 +650,7 @@ async function speakWord() {
     const res = await fetch('/api/speech', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, lang: state.lang }),
+      body: JSON.stringify({ text, lang }),
     });
 
     if (!res.ok) return;
@@ -725,14 +741,16 @@ async function sendAskQuestion() {
 function renderGallery() {
   galleryGrid.innerHTML = '';
 
-  const filtered =
-    state.filter === 'all'
-      ? state.collected
-      : state.collected.filter((item) => item.language === state.filter);
+  let filtered = state.collected;
+  if (state.filter === 'favorites') {
+    filtered = filtered.filter((item) => state.favorites.has(item.id));
+  } else if (state.filter !== 'all') {
+    filtered = filtered.filter((item) => item.language === state.filter);
+  }
 
   if (!filtered.length) {
     const empty = document.createElement('p');
-    empty.textContent = 'Collect words to build your gallery.';
+    empty.textContent = state.filter === 'favorites' ? 'No favorited words yet.' : 'Collect words to build your gallery.';
     empty.style.color = 'var(--muted)';
     galleryGrid.appendChild(empty);
     return;
@@ -834,10 +852,11 @@ function shuffle(array) {
 }
 
 function buildQuiz() {
+  const quizFilter = state.filter === 'favorites' ? 'all' : state.filter;
   const pool =
-    state.filter === 'all'
+    quizFilter === 'all'
       ? state.collected
-      : state.collected.filter((item) => item.language === state.filter);
+      : state.collected.filter((item) => item.language === quizFilter);
 
   if (pool.length < 2) {
     quizMeta.textContent = 'Collect at least 2 words to start the quiz.';
@@ -882,10 +901,11 @@ function renderQuizQuestion() {
   state.quiz.locked = false;
 
   const entry = current.entry;
+  const quizFilter = state.filter === 'favorites' ? 'all' : state.filter;
   const optionPoolBase =
-    state.filter === 'all'
+    quizFilter === 'all'
       ? state.collected.filter((item) => item.id !== entry.id)
-      : state.collected.filter((item) => item.language === state.filter && item.id !== entry.id);
+      : state.collected.filter((item) => item.language === quizFilter && item.id !== entry.id);
 
   const optionsPool = shuffle(optionPoolBase).slice(0, 3);
 
@@ -1006,6 +1026,9 @@ function init() {
 
   if (allLangBtn) {
     allLangBtn.hidden = true;
+  }
+  if (favoritesLangBtn) {
+    favoritesLangBtn.hidden = true;
   }
 
   state.filter = state.lang;

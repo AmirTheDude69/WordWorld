@@ -40,7 +40,7 @@ module.exports = async (req, res) => {
   }
 
   try {
-    const makeRequest = async (model) =>
+    const makeRequest = async (model, size) =>
       fetch('https://api.openai.com/v1/images/generations', {
         method: 'POST',
         headers: {
@@ -50,19 +50,31 @@ module.exports = async (req, res) => {
         body: JSON.stringify({
           model,
           prompt: body.prompt,
-          size: '1024x1024',
+          size,
           quality: 'medium',
         }),
       });
 
-    let response = await makeRequest('gpt-image-1.5');
-    if (!response.ok) {
-      response = await makeRequest('gpt-image-1');
+    const attempts = [
+      { model: 'gpt-image-1.5', size: '1536x1024' },
+      { model: 'gpt-image-1.5', size: '1024x1024' },
+      { model: 'gpt-image-1', size: '1536x1024' },
+      { model: 'gpt-image-1', size: '1024x1024' },
+    ];
+
+    let response = null;
+    let lastErrorText = '';
+    for (const attempt of attempts) {
+      const candidate = await makeRequest(attempt.model, attempt.size);
+      if (candidate.ok) {
+        response = candidate;
+        break;
+      }
+      lastErrorText = await candidate.text();
     }
 
-    if (!response.ok) {
-      const errText = await response.text();
-      res.status(500).json({ error: 'Image generation failed', details: errText });
+    if (!response) {
+      res.status(500).json({ error: 'Image generation failed', details: lastErrorText || 'No successful image response.' });
       return;
     }
 
