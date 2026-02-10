@@ -38,6 +38,7 @@ function extractOutputText(payload) {
 }
 
 function parseJsonSafe(text) {
+  if (typeof text !== 'string') return null;
   try {
     return JSON.parse(text);
   } catch (err) {
@@ -109,19 +110,19 @@ module.exports = async (req, res) => {
   const user = `Language: ${lang}.\n${LANG_RULES[lang].guidance}\n\nReturn a JSON object with these fields:\n- native: the word/phrase in the target language\n- romanization: pronunciation using English letters (for English too)\n- type: Noun, Verb, Adjective, Proverb, Phrase, etc.\n- meaning_en: meaning in English\n- sentence: { native, romanization, meaning_en }\n- image_prompt: a vivid scene that illustrates the word, in anime watercolor style, soft brush texture, cinematic lighting, whimsical mood, no text in image\n- tags: array of 2-4 short tags like daily, romantic, emotional, nature\n\nConstraints:\n- Keep the word/phrase short.\n- Sentence should match the scene in image_prompt.\n- Keep the romanization clear for beginners.\n- No extra keys.`;
 
   try {
-    let result = await callOpenAI({ apiKey, model: 'gpt-4.1', system, user });
-    if (!result.ok && [403, 404].includes(result.status)) {
-      result = await callOpenAI({ apiKey, model: 'gpt-4.1-mini', system, user });
+    let openAIResult = await callOpenAI({ apiKey, model: 'gpt-4.1', system, user });
+    if (!openAIResult.ok && [403, 404].includes(openAIResult.status)) {
+      openAIResult = await callOpenAI({ apiKey, model: 'gpt-4.1-mini', system, user });
     }
 
-    if (!result.ok) {
-      res.status(500).json({ error: 'OpenAI request failed', details: result.details });
+    if (!openAIResult.ok) {
+      res.status(500).json({ error: 'OpenAI request failed', details: openAIResult.details });
       return;
     }
 
-    const data = result.data;
+    const data = openAIResult.data;
 
-    const result = {
+    const wordResult = {
       id: randomUUID(),
       language: lang,
       difficulty: LANG_RULES[lang].difficulty,
@@ -134,7 +135,7 @@ module.exports = async (req, res) => {
       tags: data.tags || [],
     };
 
-    res.status(200).json(result);
+    res.status(200).json(wordResult);
   } catch (err) {
     res.status(500).json({ error: 'Failed to generate word', details: err?.message });
   }
