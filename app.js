@@ -12,6 +12,13 @@ const STORAGE_KEYS = {
   indices: 'www.wordIndexByLang',
 };
 
+const LEGACY_EN_TOKEN_SUFFIX_RE = /\s+\((today|at dawn|tonight|in practice|in reflection|in conversation|with intention|in daily life)\)$/i;
+const LEGACY_BEGINNER_MEANING_SUFFIX_RE = /\s+\((today|now|in the evening|in the morning|always|sincerely|together|quietly|tonight|calmly|gently)\)$/i;
+const LEGACY_UK_NATIVE_SUFFIXES = ['сьогодні', 'зараз', 'ввечері', 'вранці', 'завжди', 'щиро', 'разом', 'тихо'];
+const LEGACY_UK_ROMAN_SUFFIXES = ['sohodni', 'zaraz', 'vvecheri', 'vrantsi', 'zavzhdy', 'shchyro', 'razom', 'tykho'];
+const LEGACY_FA_NATIVE_SUFFIXES = ['امروز', 'الان', 'امشب', 'صبح', 'همیشه', 'آرام', 'با هم', 'آهسته'];
+const LEGACY_FA_ROMAN_SUFFIXES = ['emrooz', 'alan', 'emshab', 'sobh', 'hamisheh', 'aram', 'ba ham', 'aheste'];
+
 const wordCard = document.getElementById('wordCard');
 const wordPronounce = document.getElementById('wordPronounce');
 const wordNative = document.getElementById('wordNative');
@@ -69,6 +76,9 @@ const state = {
     locked: false,
   },
 };
+
+const inFlightImageRequests = new Map();
+const inFlightWordRequests = new Map();
 
 const storage = {
   load(key, fallback) {
@@ -131,6 +141,88 @@ function dayOfYear(date = new Date()) {
   const now = new Date(date.getFullYear(), date.getMonth(), date.getDate());
   const diff = now - start;
   return Math.floor(diff / 86400000);
+}
+
+function stripTrailingSuffix(text, suffixes) {
+  if (typeof text !== 'string') return text;
+  for (const suffix of suffixes) {
+    const withSpace = ` ${suffix}`;
+    if (text.endsWith(withSpace)) {
+      return text.slice(0, -withSpace.length).trim();
+    }
+  }
+  return text;
+}
+
+function stripTrailingSuffixWithPunctuation(text, suffixes) {
+  if (typeof text !== 'string') return text;
+  let base = text.trim();
+  let punctuation = '';
+  if (/[.!?]$/.test(base)) {
+    punctuation = base.slice(-1);
+    base = base.slice(0, -1).trim();
+  }
+  const cleaned = stripTrailingSuffix(base, suffixes);
+  return punctuation ? `${cleaned}${punctuation}` : cleaned;
+}
+
+function sanitizeLegacyEntry(entry) {
+  if (!entry || typeof entry !== 'object') return entry;
+  const next = JSON.parse(JSON.stringify(entry));
+
+  if (next.language === 'en') {
+    next.native = String(next.native || '').replace(LEGACY_EN_TOKEN_SUFFIX_RE, '').trim();
+    next.romanization = String(next.romanization || '').replace(LEGACY_EN_TOKEN_SUFFIX_RE, '').trim();
+    next.meaning_en = String(next.meaning_en || '').replace(LEGACY_EN_TOKEN_SUFFIX_RE, '').trim();
+  }
+
+  if (next.language === 'uk') {
+    const hasLegacySuffix =
+      LEGACY_BEGINNER_MEANING_SUFFIX_RE.test(String(next.meaning_en || '')) ||
+      LEGACY_BEGINNER_MEANING_SUFFIX_RE.test(String(next.sentence?.meaning_en || ''));
+
+    if (hasLegacySuffix) {
+      next.native = stripTrailingSuffix(String(next.native || ''), LEGACY_UK_NATIVE_SUFFIXES);
+      next.romanization = stripTrailingSuffix(String(next.romanization || ''), LEGACY_UK_ROMAN_SUFFIXES);
+      if (next.sentence) {
+        next.sentence.native = stripTrailingSuffixWithPunctuation(String(next.sentence.native || ''), LEGACY_UK_NATIVE_SUFFIXES);
+        next.sentence.romanization = stripTrailingSuffixWithPunctuation(String(next.sentence.romanization || ''), LEGACY_UK_ROMAN_SUFFIXES);
+      }
+    }
+
+    next.meaning_en = String(next.meaning_en || '').replace(LEGACY_BEGINNER_MEANING_SUFFIX_RE, '').trim();
+  }
+
+  if (next.language === 'fa') {
+    const hasLegacySuffix =
+      LEGACY_BEGINNER_MEANING_SUFFIX_RE.test(String(next.meaning_en || '')) ||
+      LEGACY_BEGINNER_MEANING_SUFFIX_RE.test(String(next.sentence?.meaning_en || ''));
+
+    if (hasLegacySuffix) {
+      next.native = stripTrailingSuffix(String(next.native || ''), LEGACY_FA_NATIVE_SUFFIXES);
+      next.romanization = stripTrailingSuffix(String(next.romanization || ''), LEGACY_FA_ROMAN_SUFFIXES);
+      if (next.sentence) {
+        next.sentence.native = stripTrailingSuffixWithPunctuation(String(next.sentence.native || ''), LEGACY_FA_NATIVE_SUFFIXES);
+        next.sentence.romanization = stripTrailingSuffixWithPunctuation(String(next.sentence.romanization || ''), LEGACY_FA_ROMAN_SUFFIXES);
+      }
+    }
+
+    next.meaning_en = String(next.meaning_en || '').replace(LEGACY_BEGINNER_MEANING_SUFFIX_RE, '').trim();
+  }
+
+  if (!next.sentence || typeof next.sentence !== 'object') {
+    next.sentence = {
+      native: next.native || '—',
+      romanization: next.romanization || '—',
+      meaning_en: next.meaning_en || '—',
+    };
+  }
+
+  if (next.sentence) {
+    next.sentence.meaning_en = String(next.sentence.meaning_en || next.meaning_en || '').replace(LEGACY_BEGINNER_MEANING_SUFFIX_RE, '').replace(LEGACY_EN_TOKEN_SUFFIX_RE, '').trim();
+  }
+
+  return next;
 }
 
 function entryKey(item) {
@@ -224,12 +316,27 @@ function resetArt() {
   state.currentImage = null;
 }
 
+function toImageDataUrl(base64) {
+  return `data:image/png;base64,${base64}`;
+}
+
 function updateArt(base64) {
   if (!base64) return;
-  artImage.src = `data:image/png;base64,${base64}`;
+  artImage.src = toImageDataUrl(base64);
   artFrame.classList.add('loaded');
   artLoading.textContent = '';
   state.currentImage = base64;
+}
+
+function primeCurrentImage(wordId, base64) {
+  if (!base64) return;
+  if (!state.current || state.current.id !== wordId) return;
+  artImage.src = toImageDataUrl(base64);
+  state.currentImage = base64;
+  if (state.flipped) {
+    artFrame.classList.add('loaded');
+    artLoading.textContent = '';
+  }
 }
 
 function renderError(message) {
@@ -283,27 +390,52 @@ async function ensureImageForWord(word, showStatus) {
   const cached = await idb.get('images', word.id);
   if (cached) return cached;
 
+  if (inFlightImageRequests.has(word.id)) {
+    return inFlightImageRequests.get(word.id);
+  }
+
   if (showStatus && state.current?.id === word.id) {
     artLoading.textContent = 'Painting the scene...';
   }
 
-  const res = await fetch('/api/image', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt: word.image_prompt }),
-  });
+  const request = (async () => {
+    const res = await fetch('/api/image', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: word.image_prompt }),
+    });
 
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(data.details || data.error || 'Unable to create art.');
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      let message = data.details || data.error || 'Unable to create art.';
+
+      // Some API errors come nested as JSON string payloads.
+      if (typeof message === 'string' && message.trim().startsWith('{')) {
+        try {
+          const parsed = JSON.parse(message);
+          message = parsed?.error?.message || parsed?.message || message;
+        } catch (err) {
+          // Keep original text if parsing fails.
+        }
+      }
+
+      throw new Error(message);
+    }
+
+    if (!data.image_base64) {
+      throw new Error('No image returned.');
+    }
+
+    await idb.set('images', word.id, data.image_base64);
+    return data.image_base64;
+  })();
+
+  inFlightImageRequests.set(word.id, request);
+  try {
+    return await request;
+  } finally {
+    inFlightImageRequests.delete(word.id);
   }
-
-  if (!data.image_base64) {
-    throw new Error('No image returned.');
-  }
-
-  await idb.set('images', word.id, data.image_base64);
-  return data.image_base64;
 }
 
 async function ensureImage() {
@@ -320,6 +452,53 @@ async function ensureImage() {
       artLoading.textContent = err?.message || 'Unable to create art.';
     }
   }
+}
+
+async function fetchWordByIndex(lang, index) {
+  const cacheKey = `${lang}:${index}`;
+  if (inFlightWordRequests.has(cacheKey)) {
+    return inFlightWordRequests.get(cacheKey);
+  }
+
+  const request = (async () => {
+    const res = await fetch(`/api/word?lang=${lang}&index=${index}`);
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data || data.language !== lang) return null;
+    return sanitizeLegacyEntry(data);
+  })();
+
+  inFlightWordRequests.set(cacheKey, request);
+  try {
+    return await request;
+  } finally {
+    inFlightWordRequests.delete(cacheKey);
+  }
+}
+
+async function prewarmImagesForCurrentAndNext(word, requestId, index) {
+  const currentTask = (async () => {
+    try {
+      const currentBase64 = await ensureImageForWord(word, false);
+      if (requestId === state.requestSeq) {
+        primeCurrentImage(word.id, currentBase64);
+      }
+    } catch (err) {
+      // Keep learning flow responsive even if image generation fails.
+    }
+  })();
+
+  const nextTask = (async () => {
+    try {
+      const nextIndex = (index + 1) % BANK_SIZE;
+      const nextWord = await fetchWordByIndex(word.language, nextIndex);
+      if (!nextWord || nextWord.language !== word.language) return;
+      await ensureImageForWord(nextWord, false);
+    } catch (err) {
+      // Next-card prefetch is best-effort.
+    }
+  })();
+
+  await Promise.allSettled([currentTask, nextTask]);
 }
 
 async function loadWord({ advance }) {
@@ -346,12 +525,15 @@ async function loadWord({ advance }) {
       throw new Error(`${message}${detail}`);
     }
 
-    if (!data || data.language !== lang) {
+    const normalized = sanitizeLegacyEntry(data);
+
+    if (!normalized || normalized.language !== lang) {
       throw new Error('Language mismatch from word source.');
     }
 
-    state.current = data;
+    state.current = normalized;
     updateCard();
+    void prewarmImagesForCurrentAndNext(normalized, requestId, index);
   } catch (err) {
     if (requestId !== state.requestSeq) return;
     renderError(err?.message || 'Unable to load a new word.');
@@ -420,7 +602,11 @@ function toggleFlip() {
   state.flipped = !state.flipped;
   wordCard.classList.toggle('flipped', state.flipped);
 
-  if (state.flipped && !state.currentImage) {
+  if (!state.flipped) return;
+
+  if (state.currentImage) {
+    updateArt(state.currentImage);
+  } else {
     ensureImage();
   }
 }
@@ -810,7 +996,11 @@ function initIndices() {
 
 function init() {
   initIndices();
-  state.collected = dedupeCollected(storage.load(STORAGE_KEYS.collected, []));
+  const rawCollected = storage.load(STORAGE_KEYS.collected, []);
+  const sanitized = rawCollected
+    .map((item) => sanitizeLegacyEntry(item))
+    .filter((item) => item && LANG_CONFIG[item.language]);
+  state.collected = dedupeCollected(sanitized);
   storage.save(STORAGE_KEYS.collected, state.collected);
   state.favorites = new Set(storage.load(STORAGE_KEYS.favorites, []));
 
