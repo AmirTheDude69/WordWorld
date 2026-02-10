@@ -377,22 +377,47 @@ function renderError(message) {
   resetArt();
 }
 
+function normalizeSentenceLines(entry) {
+  const rawNative = String(entry?.sentence?.native || '').trim();
+  const rawRoman = String(entry?.sentence?.romanization || '').trim();
+  const rawMeaning = String(entry?.sentence?.meaning_en || '').trim();
+
+  const lines = [rawNative, rawRoman, rawMeaning].filter(Boolean);
+  const unique = [];
+  const seen = new Set();
+
+  for (const line of lines) {
+    const key = line.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(line);
+  }
+
+  return {
+    native: unique[0] || '—',
+    romanization: unique[1] || '',
+    meaning: unique[2] || '',
+  };
+}
+
 function updateCard() {
   if (!state.current) return;
 
   const isRtl = LANG_CONFIG[state.current.language]?.dir === 'rtl';
+  const sentence = normalizeSentenceLines(state.current);
 
   wordPronounce.textContent = state.current.romanization || '—';
   wordNative.textContent = state.current.native;
   wordType.textContent = state.current.type || 'Phrase';
   wordMeaning.textContent = state.current.meaning_en;
-  sentenceNative.textContent = state.current.sentence?.native || '—';
-  sentenceRoman.textContent = state.current.sentence?.romanization || '—';
-  sentenceMeaning.textContent = state.current.sentence?.meaning_en || '—';
+  sentenceNative.textContent = sentence.native;
+  sentenceRoman.textContent = sentence.romanization;
+  sentenceMeaning.textContent = sentence.meaning;
 
   [wordNative, sentenceNative].forEach((el) => {
     el.classList.toggle('rtl', isRtl);
   });
+  wordCard.dataset.lang = state.current.language;
 
   state.flipped = false;
   wordCard.classList.remove('flipped');
@@ -792,6 +817,7 @@ function renderGallery() {
   }
 
   filtered.forEach((entry) => {
+    const sentenceLines = normalizeSentenceLines(entry);
     const cardWrapper = document.createElement('div');
     cardWrapper.className = 'gallery-card';
 
@@ -857,16 +883,16 @@ function renderGallery() {
 
     const sNative = document.createElement('p');
     sNative.className = 'sentence-native';
-    sNative.textContent = entry.sentence.native;
+    sNative.textContent = sentenceLines.native;
     if (LANG_CONFIG[entry.language]?.dir === 'rtl') sNative.classList.add('rtl');
 
     const sRoman = document.createElement('p');
     sRoman.className = 'sentence-roman';
-    sRoman.textContent = entry.sentence.romanization;
+    sRoman.textContent = sentenceLines.romanization;
 
     const sMeaning = document.createElement('p');
     sMeaning.className = 'sentence-meaning';
-    sMeaning.textContent = entry.sentence.meaning_en;
+    sMeaning.textContent = sentenceLines.meaning;
 
     sentence.append(sNative, sRoman, sMeaning);
     back.append(frame, sentence);

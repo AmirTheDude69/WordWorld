@@ -106,7 +106,12 @@ body::after {
   color: #fff;
   border: 3px solid var(--ink);
   box-shadow: var(--shadow-hard);
-  font-size: 26px;
+}
+
+.logo-icon {
+  width: 26px;
+  height: 26px;
+  display: block;
 }
 
 .eyebrow {
@@ -333,6 +338,7 @@ h1 {
 
 .card-back .art-frame {
   height: clamp(240px, 43vh, 360px);
+  flex-shrink: 0;
 }
 
 .art-frame img {
@@ -375,6 +381,20 @@ h1 {
   margin: 0;
   font-size: clamp(20px, 2.4vw, 30px);
   line-height: 1.2;
+}
+
+.sentence-roman:empty,
+.sentence-meaning:empty {
+  display: none;
+}
+
+.flip-card[data-lang="en"] .card-back .sentence-native {
+  font-size: clamp(24px, 3vw, 40px);
+}
+
+.flip-card[data-lang="en"] .card-back .sentence-roman,
+.flip-card[data-lang="en"] .card-back .sentence-meaning {
+  font-size: clamp(18px, 2.1vw, 28px);
 }
 
 .rtl {
